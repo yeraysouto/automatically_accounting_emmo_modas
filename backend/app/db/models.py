@@ -23,6 +23,11 @@ class DataOcrInvoice(Base):
     total_supplier: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
     raw_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Ingestion metadata (WhatsApp/Telegram/etc.)
+    source_channel: Mapped[Optional[str]] = mapped_column(String(32), nullable=True, index=True)
+    source_thread_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
+    source_message_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(32), default="draft")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     clothes_lines: Mapped[list[OcrInfoClothes]] = relationship(
@@ -47,7 +52,8 @@ class OcrInfoClothes(Base):
     num_invoice: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
 
-    reference_code: Mapped[str] = mapped_column(String(64), index=True)
+    # Can be null when OCR doesn't provide the reference; it can be filled later.
+    reference_code: Mapped[Optional[str]] = mapped_column(String(64), index=True, nullable=True)
     description: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     quantity: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)

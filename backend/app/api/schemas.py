@@ -36,7 +36,7 @@ class ClothesLineCreate(BaseModel):
     num_invoice: Optional[str] = None
     date: Optional[date] = None
 
-    reference_code: str = Field(min_length=1, max_length=64)
+    reference_code: Optional[str] = Field(default=None, min_length=1, max_length=64)
     description: Optional[str] = None
     quantity: Optional[int] = Field(default=None, ge=0)
     price: Optional[float] = Field(default=None, ge=0)
@@ -51,7 +51,7 @@ class ClothesLineOut(BaseModel):
     num_invoice: Optional[str]
     date: Optional[date]
 
-    reference_code: str
+    reference_code: Optional[str]
     description: Optional[str]
     quantity: Optional[int]
     price: Optional[float]
@@ -145,3 +145,35 @@ class ProcessInvoiceResult(BaseModel):
     invoice: InvoiceOut
     lines: list[ClothesLineOut]
     articles_upserted: int
+
+
+class LineSetReference(BaseModel):
+    reference_code: str = Field(min_length=1, max_length=64)
+
+
+class IngestInvoiceOcr(BaseModel):
+    # Where this came from (WhatsApp/Telegram)
+    source_channel: str = Field(min_length=2, max_length=32)
+    source_thread_id: Optional[str] = Field(default=None, max_length=128)
+    source_message_id: Optional[str] = Field(default=None, max_length=128)
+
+    # Invoice header OCR
+    cif_supplier: str = Field(min_length=3, max_length=32)
+    name_supplier: Optional[str] = None
+    tel_number_supplier: Optional[str] = None
+    email_supplier: Optional[str] = None
+    num_invoice: Optional[str] = None
+    total_supplier: Optional[float] = None
+    raw_text: Optional[str] = None
+
+    # Optional detected lines
+    lines: list[ClothesLineCreate] = Field(default_factory=list)
+
+
+class IngestLineOcr(BaseModel):
+    source_channel: str = Field(min_length=2, max_length=32)
+    source_thread_id: Optional[str] = Field(default=None, max_length=128)
+    source_message_id: Optional[str] = Field(default=None, max_length=128)
+
+    invoice_id: int
+    line: ClothesLineCreate

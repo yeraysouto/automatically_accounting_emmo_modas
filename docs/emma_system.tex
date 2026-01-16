@@ -1,0 +1,383 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[spanish]{babel}
+\usepackage{lmodern}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{enumitem}
+\usepackage{microtype}
+
+\geometry{margin=2.2cm}
+\hypersetup{colorlinks=true, linkcolor=blue, urlcolor=blue, citecolor=blue}
+
+\title{Sistema EMMA: OCR de Facturas \& Automatizaci\'on de Art\'iculos}
+\author{Documentaci\'on t\'ecnica}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\section{Resumen}
+Este documento describe el sistema EMMA para automatizar la lectura de facturas (foto/PDF), extraer datos mediante OCR y poblar una base de datos con:
+\begin{itemize}
+  \item Cabecera de factura (proveedor, n\'umero, total, etc.).
+  \item L\'ineas de art\'iculos detectadas en la factura.
+  \item Maestro de art\'iculos para importaci\'on/gesti\'on (enriquecible con cat\'alogo).
+\end{itemize}
+
+El sistema se implementa con dos APIs:
+\begin{enumerate}
+  \item \textbf{Backend principal (FastAPI)}: persiste datos y expone endpoints de negocio.
+  \item \textbf{OCR Provider (FastAPI)}: API separada que recibe el archivo y devuelve un JSON normalizado (\texttt{invoice} + \texttt{lines}).
+\end{enumerate}
+
+\section{Estructura del proyecto}
+El repositorio contiene:
+\begin{itemize}
+  \item \texttt{backend/}: API principal + OCR Provider + tests.
+  \item \texttt{docs/}: documentaci\'on (este \LaTeX) y material de requisitos (p.ej. PDF).
+  \item \texttt{automate\_reading\_accountant.js}: script legado/prototipo (no modificado por el backend).
+\end{itemize}
+
+Dentro de \texttt{backend/} (resumen):
+\begin{itemize}
+  \item \texttt{app/main.py}: crea la app FastAPI y registra startup.
+  \item \texttt{app/api/routes.py}: endpoints REST (procesado, CRUD, ingestas).
+  \item \texttt{app/services/ocr.py}: fachada OCR (modo stub o HTTP hacia OCR Provider).
+  \item \texttt{app/ocr\_provider\_main.py}: OCR Provider API (stub de ejemplo y contrato).
+  \item \texttt{app/db/*}: modelos SQLAlchemy, sesi\'on/engine e inicializaci\'on de tablas.
+  \item \texttt{tests/}: pruebas autom\'aticas (pytest) de los flujos principales.
+\end{itemize}
+
+\section{Alcance y objetivos}
+\subsection{Objetivos}
+\begin{itemize}
+  \item Subir una factura (imagen o PDF) y procesarla end-to-end.
+  \item Guardar la cabecera en \texttt{data\_ocr\_invoice}.
+  \item Guardar l\'ineas en \texttt{ocr\_info\_clothes}.
+  \item Crear/actualizar art\'iculos en \texttt{importacion\_articulos\_montcau} a partir de las l\'ineas.
+\end{itemize}
+
+\subsection{No incluido (por ahora)}
+\begin{itemize}
+  \item Integraci\'on con proveedor OCR concreto (Azure Document Intelligence, Tesseract, etc.) \textit{(se deja preparado)}.
+  \item Reglas de pricing avanzadas (p.ej. correcci\'on por PVP demasiado bajo).
+  \item UI/web dashboard.
+\end{itemize}
+
+\section{Arquitectura}
+\subsection{Componentes}
+\begin{enumerate}
+  \item \textbf{Cliente} (m\'ovil/web/script): toma una foto o adjunta PDF y llama al backend.
+  \item \textbf{Backend principal} (FastAPI):
+    \begin{itemize}
+      \item Expone endpoints REST.
+      \item Orquesta el OCR llamando a \texttt{EMMA\_OCR\_API\_URL} (opcional).
+      \item Persiste la informaci\'on en SQLite (o DB futura).
+    \end{itemize}
+  \item \textbf{OCR Provider} (FastAPI):
+    \begin{itemize}
+      \item Recibe el archivo y devuelve JSON normalizado.
+      \item En producci\'on, encapsula el proveedor OCR real.
+    \end{itemize}
+  \item \textbf{Base de datos} (SQLite por defecto): almacena cabeceras, l\'ineas y art\'iculos.
+\end{enumerate}
+
+\subsection{Flujo principal}
+\begin{enumerate}
+  \item El cliente env\'ia una imagen/PDF a \texttt{POST /process/invoice}.
+  \item El backend llama al OCR Provider (si est\'a configurado) o usa un stub.
+  \item El backend guarda cabecera y l\'ineas.
+  \item El backend hace upsert de art\'iculos por \texttt{reference\_code}.
+\end{enumerate}
+
+\subsection{Flujo de reprocesado (actualizaci\'on)}
+Cuando se dispone de una nueva foto/PDF para una factura ya creada:
+\begin{enumerate}
+  \item El cliente env\'ia un nuevo archivo a \texttt{POST /invoices/\{id\}/process}.
+  \item El backend ejecuta OCR (HTTP o stub) y actualiza cabecera/l\'ineas asociadas.
+  \item Se recalcula el upsert de art\'iculos seg\'un las l\'ineas resultantes.
+\end{enumerate}
+
+\section{Modelo de datos}
+\subsection{Tabla: data\_ocr\_invoice}
+\begin{longtable}{@{}llp{8.0cm}@{}}
+\toprule
+Campo & Tipo & Descripci\'on \\ \midrule
+\endhead
+id & int & PK \\ 
+cif\_supplier & string & Identificador fiscal del proveedor \\ 
+name\_supplier & string? & Nombre del proveedor \\ 
+tel\_number\_supplier & string? & Tel\'efono \\ 
+email\_supplier & string? & Email \\ 
+num\_invoice & string? & N\'umero de factura \\ 
+total\_supplier & float? & Total de la factura (si se detecta) \\ 
+raw\_text & text? & Texto OCR completo (opcional) \\ 
+source\_channel & string? & Canal de origen (p.ej. \texttt{whatsapp}, \texttt{telegram}) \\ 
+source\_thread\_id & string? & Identificador de hilo/chat para correlaci\'on \\ 
+source\_message\_id & string? & Identificador del mensaje origen (trazabilidad) \\ 
+status & string & Estado de la factura (por defecto \texttt{draft}) \\ 
+created\_at & datetime & Fecha de inserci\'on \\ 
+\bottomrule
+\end{longtable}
+
+\subsection{Tabla: ocr\_info\_clothes}
+\begin{longtable}{@{}llp{8.0cm}@{}}
+\toprule
+Campo & Tipo & Descripci\'on \\ \midrule
+\endhead
+id & int & PK \\ 
+invoice\_id & int & FK a \texttt{data\_ocr\_invoice.id} \\ 
+cif\_supplier & string & Copia del CIF del proveedor \\ 
+name\_supplier & string? & Nombre del proveedor \\ 
+num\_invoice & string? & N\'umero de factura \\ 
+date & date? & Fecha (si el OCR la devuelve) \\ 
+reference\_code & string? & C\'odigo de referencia (puede ser \texttt{null} si el OCR no lo trae) \\ 
+description & string? & Descripci\'on de la l\'inea \\ 
+quantity & int? & Cantidad \\ 
+price & float? & Precio unitario (interpretaci\'on depende del proveedor) \\ 
+total\_no\_iva & float? & Total sin IVA (si se detecta) \\ 
+\bottomrule
+\end{longtable}
+
+Nota: existe una restricci\'on de unicidad a nivel de base de datos para evitar duplicados por \texttt{(invoice\_id, reference\_code)} cuando la referencia est\'a informada.
+
+\subsection{Tabla: importacion\_articulos\_montcau}
+Esta tabla act\'ua como maestro de art\'iculos. Para la primera versi\'on el backend hace upsert m\'inimo con:
+\begin{itemize}
+  \item \texttt{reference\_code} (clave de negocio)
+  \item \texttt{descripcion} (desde la l\'inea OCR)
+  \item \texttt{cantidad} (desde la l\'inea OCR)
+  \item \texttt{coste\_unitario} (desde la l\'inea OCR)
+\end{itemize}
+
+El resto de campos (EAN, familia, marca, fotos, etc.) se pueden enriquecer en fases posteriores.
+
+\section{APIs}
+\subsection{Backend principal (puerto 8000)}
+\begin{itemize}
+  \item \texttt{GET /health}: healthcheck.
+  \item \texttt{POST /process/invoice}: procesa factura nueva (archivo) y crea registros.
+  \item \texttt{POST /ingest/invoice}: ingesta de OCR ya extra\'ido (p.ej. desde WhatsApp/Telegram).
+  \item \texttt{POST /ingest/line}: ingesta de OCR de una prenda/l\'inea para una factura existente.
+  \item \texttt{POST /invoices/\{id\}/lines/\{line\_id\}/set-reference}: completar referencia en una l\'inea.
+  \item \texttt{POST /invoices}: crea cabecera manual.
+  \item \texttt{GET /invoices/\{id\}}: consulta cabecera.
+  \item \texttt{POST /invoices/\{id\}/lines}: a\~nade l\'inea manual.
+  \item \texttt{GET /invoices/\{id\}/lines}: lista l\'ineas.
+  \item \texttt{POST /invoices/\{id\}/process}: reprocesa factura existente con nueva foto/archivo.
+  \item \texttt{PUT /articles}: upsert de art\'iculo por \texttt{reference\_code}.
+  \item \texttt{GET /articles/\{reference\_code\}}: consulta art\'iculo.
+\end{itemize}
+
+\subsection{Notas de dise\~no de API}
+\begin{itemize}
+  \item Los endpoints que aceptan fichero aplican validaci\'on de tama\~no y allowlist de tipo MIME.
+  \item La autenticaci\'on por \texttt{X-API-Key} es opcional, activable por variable de entorno.
+  \item La ingesta por JSON (WhatsApp/Telegram) permite persistir l\'ineas aun sin \texttt{reference\_code}.
+\end{itemize}
+
+\section{Ingesti\'on desde WhatsApp y Telegram}
+En este escenario, el OCR (de factura y/o prenda) llega como mensajes por WhatsApp o Telegram.
+
+\subsection{Patrones recomendados}
+\begin{enumerate}
+  \item \textbf{Webhooks}: un servicio receptor valida la autenticidad del proveedor (firma/token), extrae texto/media y llama al backend.
+  \item \textbf{Normalizaci\'on}: el texto OCR se transforma a JSON estable (cabecera + l\'ineas) y se env\'ia a \texttt{/ingest/invoice} o \texttt{/ingest/line}.
+  \item \textbf{Correlaci\'on}: usar un identificador de hilo (chat id) y/o un c\'odigo interno de factura para asociar mensajes al \texttt{invoice} correcto.
+\end{enumerate}
+
+\subsection{Referencias (\texttt{reference\_code})}
+\begin{itemize}
+  \item Si el OCR trae \texttt{reference\_code}, se guarda directamente en \texttt{ocr\_info\_clothes} y se hace upsert del art\'iculo.
+  \item Si \textbf{no} hay \texttt{reference\_code}, lo \textbf{\'optimo} es guardar la l\'inea igualmente (con \texttt{reference\_code = null}) y completar la referencia despu\'es.
+\end{itemize}
+
+\subsection{\'Optimo cuando falta la referencia}
+Recomendaci\'on como auditor\'ia TI:
+\begin{enumerate}
+  \item \textbf{Persistir sin bloquear}: no rechazar la l\'inea; guardar descripci\'on, cantidad, precio y el texto OCR.
+  \item \textbf{Estado y trazabilidad}: marcar factura como \texttt{draft} y registrar origen (canal, hilo, message id).
+  \item \textbf{Resoluci\'on posterior}: completar la referencia v\'ia endpoint (manual) o mediante matching autom\'atico por:
+    \begin{itemize}
+      \item EAN (si existe),
+      \item similitud de descripci\'on (fuzzy),
+      \item cat\'alogo del proveedor,
+      \item hist\'orico de compras.
+    \end{itemize}
+\end{enumerate}
+
+\subsection{Seguridad (muy importante)}
+\begin{itemize}
+  \item Verificar firma/token de webhooks (WhatsApp/Telegram) y no aceptar peticiones an\'onimas.
+  \item Evitar guardar media completa si no es necesario; aplicar retenci\'on limitada.
+  \item No loggear PII en texto plano; redactar o minimizar.
+  \item Rate limiting y protecci\'on ante spam.
+\end{itemize}
+
+\subsection{OCR Provider (puerto 8001)}
+\begin{itemize}
+  \item \texttt{GET /health}: healthcheck.
+  \item \texttt{POST /ocr/invoice}: recibe archivo en \texttt{multipart/form-data} con campo \texttt{file}.
+\end{itemize}
+
+\subsection{Contrato del OCR Provider}
+Recomendado:
+\begin{verbatim}
+{
+  "invoice": {
+    "cif_supplier": "B123...",
+    "name_supplier": "Proveedor SL",
+    "num_invoice": "F-2026-001",
+    "date": "2026-01-16",
+    "total_supplier": 123.45,
+    "raw_text": "texto completo OCR (opcional)"
+  },
+  "lines": [
+    {
+      "reference_code": "ABC123",
+      "description": "CAMISETA",
+      "quantity": 10,
+      "price": 5.5,
+      "total_no_iva": 55.0
+    }
+  ]
+}
+\end{verbatim}
+
+El backend es tolerante: si el payload no coincide exactamente, intenta extraer lo posible y guarda el resto en \texttt{raw\_text}.
+
+\section{Configuraci\'on}
+Variables de entorno (en \texttt{backend/.env}):
+\begin{itemize}
+  \item \texttt{EMMA\_DATABASE\_URL}: por defecto \texttt{sqlite:///./emma.db}.
+  \item \texttt{EMMA\_API\_KEY}: si se define, exige cabecera \texttt{X-API-Key} en endpoints protegidos.
+  \item \texttt{EMMA\_CORS\_ORIGINS}: lista separada por comas (si est\'a vac\'ia, no se habilita CORS).
+  \item \texttt{EMMA\_MAX\_UPLOAD\_BYTES}: l\'imite de tama\~no para subidas (protecci\'on DoS b\'asica).
+  \item \texttt{EMMA\_ALLOWED\_UPLOAD\_MIME\_TYPES}: allowlist de MIME (p.ej. \texttt{application/pdf,image/jpeg,image/png}).
+  \item \texttt{EMMA\_OCR\_API\_URL}: endpoint del OCR Provider, p.ej. \texttt{http://localhost:8001/ocr/invoice}.
+  \item \texttt{EMMA\_OCR\_API\_KEY}: opcional, se env\'ia como bearer token.
+  \item \texttt{EMMA\_OCR\_API\_TIMEOUT\_S}: timeout.
+\end{itemize}
+
+Para facilitar el arranque se incluye \texttt{backend/.env.example}.
+
+\section{Ejecuci\'on local}
+\subsection{Backend}
+\begin{verbatim}
+cd backend
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn app.main:app --reload --port 8000
+\end{verbatim}
+
+\subsection{OCR Provider (stub)}
+\begin{verbatim}
+cd backend
+source .venv/bin/activate
+uvicorn app.ocr_provider_main:app --reload --port 8001
+\end{verbatim}
+
+\section{Consideraciones de seguridad}
+\begin{itemize}
+  \item Validar tama\~no de archivo (l\'imites) y tipo MIME.
+  \item Autenticaci\'on (API key/JWT) si se expone a Internet (en esta versi\'on: \texttt{X-API-Key} opcional).
+  \item Registro (logging) sin almacenar PII innecesaria.
+  \item Control de errores del OCR (timeouts, reintentos, circuit breaker).
+\end{itemize}
+
+\section{Despliegue (Docker)}
+El backend incluye un \texttt{Dockerfile} para ejecutar la API principal en contenedor.
+En esta versi\'on se usa SQLite por defecto (v\'alido para desarrollo y baja concurrencia). Para producci\'on, se recomienda Postgres.
+
+\section{Pruebas autom\'aticas}
+Se han a\~nadido pruebas de integraci\'on con \texttt{pytest} usando \texttt{TestClient} de FastAPI:
+\begin{itemize}
+  \item Healthcheck.
+  \item Ingesta de factura por JSON con l\'inea sin referencia.
+  \item Completar referencia y verificar upsert de art\'iculo.
+  \item Validaci\'on de seguridad (API key requerida cuando est\'a configurada).
+  \item Rechazo de MIME no permitido.
+\end{itemize}
+
+Ejecuci\'on:
+\begin{verbatim}
+cd backend
+source .venv/bin/activate
+pip install -r requirements-dev.txt
+pytest -q
+\end{verbatim}
+
+Nota t\'ecnica importante: se corrigi\'o la inicializaci\'on de base de datos para tests, asegurando que \texttt{init\_db()} crea las tablas sobre el engine activo (DB temporal) y no sobre una referencia antigua.
+
+\section{Cambios implementados (resumen)}
+Esta versi\'on del proyecto incluye, adem\'as del flujo base del diagrama, los siguientes cambios y ampliaciones:
+\begin{itemize}
+  \item \textbf{Integraci\'on OCR por HTTP (opcional)}: si se define \texttt{EMMA\_OCR\_API\_URL}, el backend env\'ia el fichero a un servicio OCR externo.
+  \item \textbf{OCR Provider API (servicio separado)}: FastAPI adicional con \texttt{POST /ocr/invoice} que devuelve un contrato JSON estable.
+  \item \textbf{Reprocesado de facturas}: endpoint \texttt{POST /invoices/\{id\}/process} para actualizar una factura existente con una nueva foto/PDF.
+  \item \textbf{Ingesta WhatsApp/Telegram}: endpoints \texttt{/ingest/invoice} y \texttt{/ingest/line} para recibir OCR ya extra\'ido en JSON.
+  \item \textbf{Referencia opcional en l\'ineas}: \texttt{reference\_code} puede ser \texttt{null} y completarse despu\'es con \texttt{/set-reference}.
+  \item \textbf{Trazabilidad de origen}: columnas \texttt{source\_channel}, \texttt{source\_thread\_id}, \texttt{source\_message\_id} y \texttt{status} en la cabecera.
+  \item \textbf{Endurecimiento b\'asico}: API key opcional, CORS configurable, validaci\'on de tama\~no y MIME de uploads.
+  \item \textbf{Pruebas autom\'aticas}: suite pytest con DB temporal por test.
+\end{itemize}
+
+\section{Plan de trabajo (por fases)}
+\subsection{Fase 0: Base funcional (ya implementada)}
+\begin{itemize}
+  \item BD con 3 tablas.
+  \item Backend con endpoints y flujo end-to-end.
+  \item OCR Provider stub y conexi\'on por HTTP.
+\end{itemize}
+
+\subsection{Fase 1: OCR real}
+\begin{enumerate}[label=\arabic*.]
+  \item Elegir proveedor OCR (Azure DI recomendado para facturas).
+  \item Implementar en OCR Provider:
+    \begin{itemize}
+      \item Extracci\'on de cabecera (CIF, n\'umero, fecha, total).
+      \item Extracci\'on de l\'ineas (reference\_code, cantidad, precio, total sin IVA).
+    \end{itemize}
+  \item Definir normalizaciones:
+    \begin{itemize}
+      \item Formatos num\'ericos, separador decimal.
+      \item Limpieza de \texttt{reference\_code} (espacios, guiones, etc.).
+    \end{itemize}
+\end{enumerate}
+
+\subsection{Fase 2: Reglas de negocio y calidad de datos}
+\begin{enumerate}[label=\arabic*.]
+  \item Detecci\'on de duplicados (factura por proveedor + num\_invoice).
+  \item Validaciones: cantidades negativas, precios an\'omalos.
+  \item Reglas de pricing (p.ej. corregir PVP muy bajo) con trazabilidad.
+\end{enumerate}
+
+\subsection{Fase 3: Integraci\'on con cat\'alogo / ERP}
+\begin{enumerate}[label=\arabic*.]
+  \item Sincronizar EAN, familias, marca, fotos.
+  \item Enriquecer art\'iculos por reference\_code.
+  \item Exportaciones (CSV/Excel) seg\'un el formato requerido.
+\end{enumerate}
+
+\subsection{Fase 4: Operaci\'on y despliegue}
+\begin{enumerate}[label=\arabic*.]
+  \item Migrar SQLite a Postgres si hay concurrencia.
+  \item Contenerizar (Docker) y despliegue.
+  \item Observabilidad: logs estructurados, m\'etricas, trazas.
+\end{enumerate}
+
+\section{Preguntas abiertas (para cerrar requisitos)}
+\begin{itemize}
+  \item \textbf{Formato de entrada}: \% imagen/PDF, resoluci\'on t\'ipica.
+  \item \textbf{Campos obligatorios}: CIF, num\_invoice, fecha, etc.
+  \item \textbf{Regla de pricing}: cu\'al es el umbral para considerar PVP ``muy bajo''.
+  \item \textbf{Identidad del art\'iculo}: reference\_code de 3 letras + resto (seg\'un el diagrama).
+\end{itemize}
+
+\end{document}
