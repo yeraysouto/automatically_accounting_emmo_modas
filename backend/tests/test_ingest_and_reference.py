@@ -15,7 +15,7 @@ def test_ingest_invoice_allows_line_without_reference(client: TestClient):
         "cif_supplier": "B12345678",
         "name_supplier": "Proveedor SL",
         "num_invoice": "F-1",
-        "total_supplier": 10.5,
+        "total_invoice_amount": 10.5,
         "raw_text": "OCR factura",
         "lines": [
             {
@@ -51,6 +51,7 @@ def test_set_reference_upserts_article(client: TestClient):
             "name_supplier": "Proveedor SL",
             "num_invoice": "F-2",
         },
+        headers={"X-API-Key": "test-key"},
     ).json()
 
     # Add line without reference
@@ -66,12 +67,14 @@ def test_set_reference_upserts_article(client: TestClient):
             "price": 9.99,
             "total_no_iva": 9.99,
         },
+        headers={"X-API-Key": "test-key"},
     ).json()
 
     # Complete reference
     r = client.post(
         f"/invoices/{inv['id']}/lines/{line['id']}/set-reference",
         json={"reference_code": "ABC123"},
+        headers={"X-API-Key": "test-key"},
     )
     assert r.status_code == 200, r.text
 

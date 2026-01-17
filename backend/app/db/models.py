@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import Date, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Date, DateTime, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -20,7 +20,9 @@ class DataOcrInvoice(Base):
     email_supplier: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 
     num_invoice: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
-    total_supplier: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    total_invoice_amount: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    invoice_type: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    optional_fields: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 
     raw_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     # Ingestion metadata (WhatsApp/Telegram/etc.)
@@ -28,6 +30,9 @@ class DataOcrInvoice(Base):
     source_thread_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
     source_message_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(32), default="draft")
+    invoice_file_path: Mapped[Optional[str]] = mapped_column(String(2048), nullable=True)
+    invoice_file_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    invoice_file_mime_type: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     clothes_lines: Mapped[list[OcrInfoClothes]] = relationship(
@@ -54,10 +59,13 @@ class OcrInfoClothes(Base):
 
     # Can be null when OCR doesn't provide the reference; it can be filled later.
     reference_code: Mapped[Optional[str]] = mapped_column(String(64), index=True, nullable=True)
+    reference_code_origin: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
     description: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     quantity: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     total_no_iva: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    price_flag: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    price_flag_reason: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 
     invoice: Mapped[DataOcrInvoice] = relationship(back_populates="clothes_lines")
 

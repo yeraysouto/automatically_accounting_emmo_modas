@@ -9,9 +9,9 @@ from fastapi.testclient import TestClient
 def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     # Configure env for this test run
     db_path = tmp_path / "test.db"
-    monkeypatch.setenv("EMMA_DATABASE_URL", f"sqlite:///{db_path}")
-    monkeypatch.setenv("EMMA_API_KEY", "test-key")
-    monkeypatch.delenv("EMMA_OCR_API_URL", raising=False)
+    monkeypatch.setenv("EMMO_DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("EMMO_API_KEY", "test-key")
+    monkeypatch.delenv("EMMO_OCR_API_URL", raising=False)
 
     # Clear settings cache so env vars are picked up
     import app.settings as settings_module

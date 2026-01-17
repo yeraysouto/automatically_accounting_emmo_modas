@@ -17,13 +17,15 @@ class ParsedInvoice:
     email_supplier: Optional[str]
     num_invoice: Optional[str]
     invoice_date: Optional[date]
-    total_supplier: Optional[float]
+    total_invoice_amount: Optional[float]
+    invoice_type: Optional[str]
+    optional_fields: Optional[dict]
     raw_text: Optional[str]
 
 
 @dataclass(frozen=True)
 class ParsedLine:
-    reference_code: str
+    reference_code: Optional[str]
     description: Optional[str]
     quantity: Optional[int]
     price: Optional[float]
@@ -54,7 +56,9 @@ class OcrService:
             email_supplier=None,
             num_invoice=None,
             invoice_date=None,
-            total_supplier=None,
+            total_invoice_amount=None,
+            invoice_type=None,
+            optional_fields=None,
             raw_text=raw_text,
         )
 
@@ -86,7 +90,7 @@ class OcrService:
 
         Invoice keys we look for (any of these):
         - cif_supplier, name_supplier, tel_number_supplier, email_supplier
-        - num_invoice, date, total_supplier, raw_text
+        - num_invoice, date, total_invoice_amount, invoice_type, optional_fields, raw_text
         Line keys we look for:
         - reference_code, description, quantity, price, total_no_iva
         """
@@ -118,12 +122,17 @@ class OcrService:
             except ValueError:
                 invoice_date = None
 
-        total_supplier = None
-        if invoice_obj.get("total_supplier") is not None:
+        total_invoice_amount = None
+        if invoice_obj.get("total_invoice_amount") is not None:
             try:
-                total_supplier = float(invoice_obj["total_supplier"])  # type: ignore[arg-type]
+                total_invoice_amount = float(invoice_obj["total_invoice_amount"])  # type: ignore[arg-type]
             except (TypeError, ValueError):
-                total_supplier = None
+                total_invoice_amount = None
+        elif invoice_obj.get("total_supplier") is not None:
+            try:
+                total_invoice_amount = float(invoice_obj["total_supplier"])  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                total_invoice_amount = None
 
         invoice = ParsedInvoice(
             cif_supplier=cif_supplier,
@@ -132,7 +141,9 @@ class OcrService:
             email_supplier=str(invoice_obj["email_supplier"]) if isinstance(invoice_obj.get("email_supplier"), str) else None,
             num_invoice=str(invoice_obj["num_invoice"]) if isinstance(invoice_obj.get("num_invoice"), str) else None,
             invoice_date=invoice_date,
-            total_supplier=total_supplier,
+            total_invoice_amount=total_invoice_amount,
+            invoice_type=str(invoice_obj["invoice_type"]) if isinstance(invoice_obj.get("invoice_type"), str) else None,
+            optional_fields=invoice_obj.get("optional_fields") if isinstance(invoice_obj.get("optional_fields"), dict) else None,
             raw_text=raw_text or f"OCR filename={filename}",
         )
 
@@ -141,8 +152,10 @@ class OcrService:
             if not isinstance(item, dict):
                 continue
             reference = item.get("reference_code")
-            if not isinstance(reference, str) or not reference.strip():
-                continue
+            if isinstance(reference, str):
+                reference = reference.strip() or None
+            else:
+                reference = None
 
             quantity = None
             if item.get("quantity") is not None:
@@ -167,7 +180,7 @@ class OcrService:
 
             parsed_lines.append(
                 ParsedLine(
-                    reference_code=reference.strip(),
+                    reference_code=reference,
                     description=str(item["description"]) if isinstance(item.get("description"), str) else None,
                     quantity=quantity,
                     price=price,

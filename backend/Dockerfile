@@ -7,7 +7,7 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 
 COPY app /app/app
 
-ENV EMMA_DATABASE_URL=sqlite:///./emma.db
+ENV EMMO_DATABASE_URL=sqlite:///./emmo.db
 
 EXPOSE 8000
 

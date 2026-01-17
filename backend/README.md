@@ -39,30 +39,67 @@ Docs interactiva:
 
 Por defecto usa SQLite local:
 
-- `EMMA_DATABASE_URL=sqlite:///./emma.db`
+- `EMMO_DATABASE_URL=sqlite:///./emmo.db`
 
 Hay un ejemplo en [backend/.env.example](backend/.env.example).
 
 ### Seguridad (API key opcional)
 
-Si configuras `EMMA_API_KEY`, entonces las rutas que suben archivos requieren header:
+Si configuras `EMMO_API_KEY`, entonces las rutas de escritura requieren header:
 
 - `X-API-Key: <tu_clave>`
 
+Si quieres desactivar esta exigencia para escritura en desarrollo:
+
+- `EMMO_REQUIRE_API_KEY_FOR_WRITE=false`
+
 ### Límites de subida
 
-- `EMMA_MAX_UPLOAD_BYTES` (por defecto 15MB)
-- `EMMA_ALLOWED_UPLOAD_MIME_TYPES` (por defecto `image/jpeg,image/png,application/pdf`)
+- `EMMO_MAX_UPLOAD_BYTES` (por defecto 15MB)
+- `EMMO_ALLOWED_UPLOAD_MIME_TYPES` (por defecto `image/jpeg,image/png,application/pdf`)
+
+### Almacenamiento de PDFs/Imágenes
+
+Al subir una factura por `POST /process/invoice` o `POST /invoices/{id}/process` se guarda el archivo en:
+
+```
+<storage_root>/invoices/<year>/Q<quarter>/<uuid>.<ext>
+```
+
+Configuración:
+
+- `EMMO_STORAGE_ROOT=./storage`
+- `EMMO_STORE_UPLOADS=true`
 
 ### OCR externo (opcional)
 
 Si quieres que el backend se conecte a **tu OCR via API**, configura:
 
-- `EMMA_OCR_API_URL=https://tu-ocr/endpoint`
-- `EMMA_OCR_API_KEY=...` (opcional; se envía como `Authorization: Bearer <key>`)
-- `EMMA_OCR_API_TIMEOUT_S=60`
+- `EMMO_OCR_API_URL=https://tu-ocr/endpoint`
+- `EMMO_OCR_API_KEY=...` (opcional; se envía como `Authorization: Bearer <key>`)
+- `EMMO_OCR_API_TIMEOUT_S=60`
 
 El backend hace `POST multipart/form-data` con el campo `file`.
+
+### Reference code (fallback opcional)
+
+Si el OCR no aporta `reference_code`, puedes activar un fallback determinista:
+
+- `EMMO_AUTO_REFERENCE_CODE=true`
+- Formato: `AAA_<hash64>` usando el nombre del proveedor + descripción + num
+to de factura.
+
+Esto facilita trazabilidad sin bloquear el flujo. El origen queda en `reference_code_origin`.
+
+### Pricing (reglas matemáticas, sin IA)
+
+Se compara el precio OCR contra `coste_unitario` del maestro de artículos (si existe).
+
+- `EMMO_PRICE_CORRECTION_MODE=flag_only` (por defecto)
+- `EMMO_PRICE_CORRECTION_MODE=floor_to_cost` (corrige a coste)
+- `EMMO_PRICE_MIN_RATIO=0.7` (precio mínimo relativo)
+
+Cuando se detecta un precio bajo se marca `price_flag` y `price_flag_reason`.
 
 ### OCR Provider local (para empezar rápido)
 
@@ -77,7 +114,7 @@ uvicorn app.ocr_provider_main:app --reload --port 8001
 2) En `backend/.env`:
 
 ```bash
-EMMA_OCR_API_URL=http://localhost:8001/ocr/invoice
+EMMO_OCR_API_URL=http://localhost:8001/ocr/invoice
 ```
 
 Luego usa `POST /process/invoice` o `POST /invoices/{id}/process` en el backend (puerto 8000).
@@ -91,7 +128,9 @@ Respuesta recomendada (pero tolerante):
 		"name_supplier": "Proveedor SL",
 		"num_invoice": "F-2026-001",
 		"date": "2026-01-16",
-		"total_supplier": 123.45,
+		"total_invoice_amount": 123.45,
+		"invoice_type": "textil",
+		"optional_fields": {"campana": "rebajas"},
 		"raw_text": "texto completo OCR (opcional)"
 	},
 	"lines": [

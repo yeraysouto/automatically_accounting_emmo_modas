@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -22,7 +24,11 @@ from app.db.session import get_db
 from app.settings import get_settings
 from app.api.deps import AuthDep, read_upload_limited, validate_upload
 from app.services.ocr import OcrService
+from app.services.pricing import apply_price_decision, evaluate_price
+from app.services.reference_code import generate_reference_code
+from app.services.storage import save_invoice_upload
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -32,7 +38,7 @@ def health():
 
 
 @router.post("/invoices", response_model=InvoiceOut)
-def create_invoice(payload: InvoiceCreate, db: Session = Depends(get_db)):
+def create_invoice(payload: InvoiceCreate, db: Session = Depends(get_db), _: None = AuthDep):
     invoice = DataOcrInvoice(**payload.model_dump())
     db.add(invoice)
     db.commit()
@@ -49,13 +55,38 @@ def get_invoice(invoice_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/invoices/{invoice_id}/lines", response_model=ClothesLineOut)
-def add_invoice_line(invoice_id: int, payload: ClothesLineCreate, db: Session = Depends(get_db)):
+def add_invoice_line(
+    invoice_id: int,
+    payload: ClothesLineCreate,
+    db: Session = Depends(get_db),
+    _: None = AuthDep,
+):
     invoice = db.get(DataOcrInvoice, invoice_id)
     if not invoice:
         raise HTTPException(status_code=404, detail="Invoice not found")
 
     line = OcrInfoClothes(invoice_id=invoice_id, **payload.model_dump())
+    if line.reference_code and line.reference_code_origin is None:
+        line.reference_code_origin = "manual"
+    if line.reference_code is None and get_settings().auto_reference_code:
+        line.reference_code = generate_reference_code(
+            name_supplier=line.name_supplier,
+            description=line.description,
+            num_invoice=line.num_invoice,
+        )
+        if line.reference_code:
+            line.reference_code_origin = "auto"
     db.add(line)
+    article = None
+    if line.reference_code:
+        q = select(ImportacionArticulosMontcau).where(
+            ImportacionArticulosMontcau.reference_code == line.reference_code
+        )
+        article = db.scalars(q).first()
+        decision = evaluate_price(line=line, article=article)
+        apply_price_decision(line, decision)
+        if decision.flag:
+            logger.info("price_flag", extra={"flag": decision.flag, "reference_code": line.reference_code})
     try:
         db.commit()
     except IntegrityError:
@@ -72,6 +103,7 @@ def set_line_reference(
     line_id: int,
     payload: LineSetReference,
     db: Session = Depends(get_db),
+    _: None = AuthDep,
 ):
     invoice = db.get(DataOcrInvoice, invoice_id)
     if not invoice:
@@ -82,6 +114,7 @@ def set_line_reference(
         raise HTTPException(status_code=404, detail="Line not found")
 
     line.reference_code = payload.reference_code
+    line.reference_code_origin = "manual"
     try:
         db.commit()
     except IntegrityError:
@@ -122,7 +155,9 @@ def ingest_invoice_ocr(payload: IngestInvoiceOcr, db: Session = Depends(get_db),
             tel_number_supplier=payload.tel_number_supplier,
             email_supplier=payload.email_supplier,
             num_invoice=payload.num_invoice,
-            total_supplier=payload.total_supplier,
+            total_invoice_amount=payload.total_invoice_amount,
+            invoice_type=payload.invoice_type,
+            optional_fields=payload.optional_fields,
             raw_text=payload.raw_text,
             source_channel=payload.source_channel,
             source_thread_id=payload.source_thread_id,
@@ -135,6 +170,16 @@ def ingest_invoice_ocr(payload: IngestInvoiceOcr, db: Session = Depends(get_db),
         out_lines: list[OcrInfoClothes] = []
         for ln in payload.lines:
             line = OcrInfoClothes(invoice_id=invoice.id, **ln.model_dump())
+            if line.reference_code and line.reference_code_origin is None:
+                line.reference_code_origin = "ocr"
+            if line.reference_code is None and get_settings().auto_reference_code:
+                line.reference_code = generate_reference_code(
+                    name_supplier=line.name_supplier,
+                    description=line.description,
+                    num_invoice=line.num_invoice,
+                )
+                if line.reference_code:
+                    line.reference_code_origin = "auto"
             db.add(line)
             out_lines.append(line)
 
@@ -163,6 +208,11 @@ def ingest_invoice_ocr(payload: IngestInvoiceOcr, db: Session = Depends(get_db),
                 if line.price is not None:
                     article.coste_unitario = line.price
 
+            decision = evaluate_price(line=line, article=article)
+            apply_price_decision(line, decision)
+            if decision.flag:
+                logger.info("price_flag", extra={"flag": decision.flag, "reference_code": line.reference_code})
+
     db.refresh(invoice)
     q = select(OcrInfoClothes).where(OcrInfoClothes.invoice_id == invoice.id).order_by(OcrInfoClothes.id)
     saved_lines = list(db.scalars(q).all())
@@ -179,7 +229,27 @@ def ingest_line_ocr(payload: IngestLineOcr, db: Session = Depends(get_db), _: No
 
     line_payload = payload.line
     line = OcrInfoClothes(invoice_id=invoice.id, **line_payload.model_dump())
+    if line.reference_code and line.reference_code_origin is None:
+        line.reference_code_origin = "ocr"
+    if line.reference_code is None and get_settings().auto_reference_code:
+        line.reference_code = generate_reference_code(
+            name_supplier=line.name_supplier,
+            description=line.description,
+            num_invoice=line.num_invoice,
+        )
+        if line.reference_code:
+            line.reference_code_origin = "auto"
     db.add(line)
+    article = None
+    if line.reference_code:
+        q = select(ImportacionArticulosMontcau).where(
+            ImportacionArticulosMontcau.reference_code == line.reference_code
+        )
+        article = db.scalars(q).first()
+        decision = evaluate_price(line=line, article=article)
+        apply_price_decision(line, decision)
+        if decision.flag:
+            logger.info("price_flag", extra={"flag": decision.flag, "reference_code": line.reference_code})
     try:
         db.commit()
     except IntegrityError:
@@ -200,7 +270,7 @@ def list_invoice_lines(invoice_id: int, db: Session = Depends(get_db)):
 
 
 @router.put("/articles", response_model=ArticleOut)
-def upsert_article(payload: ArticleUpsert, db: Session = Depends(get_db)):
+def upsert_article(payload: ArticleUpsert, db: Session = Depends(get_db), _: None = AuthDep):
     q = select(ImportacionArticulosMontcau).where(
         ImportacionArticulosMontcau.reference_code == payload.reference_code
     )
@@ -249,6 +319,12 @@ async def process_invoice(file: UploadFile = File(...), db: Session = Depends(ge
     file_bytes = await read_upload_limited(file, max_bytes=get_settings().max_upload_bytes)
     ocr = OcrService()
     parsed_invoice, parsed_lines = ocr.parse(file_bytes, filename=file.filename or "uploaded")
+    stored_path = save_invoice_upload(
+        file_bytes,
+        filename=file.filename,
+        mime_type=file.content_type,
+        invoice_date=parsed_invoice.invoice_date,
+    )
 
     with db.begin():
         invoice = DataOcrInvoice(
@@ -257,8 +333,13 @@ async def process_invoice(file: UploadFile = File(...), db: Session = Depends(ge
             tel_number_supplier=parsed_invoice.tel_number_supplier,
             email_supplier=parsed_invoice.email_supplier,
             num_invoice=parsed_invoice.num_invoice,
-            total_supplier=parsed_invoice.total_supplier,
+            total_invoice_amount=parsed_invoice.total_invoice_amount,
+            invoice_type=parsed_invoice.invoice_type,
+            optional_fields=parsed_invoice.optional_fields,
             raw_text=parsed_invoice.raw_text,
+            invoice_file_path=stored_path,
+            invoice_file_name=file.filename,
+            invoice_file_mime_type=file.content_type,
         )
         db.add(invoice)
         db.flush()
@@ -277,12 +358,24 @@ async def process_invoice(file: UploadFile = File(...), db: Session = Depends(ge
                 price=ln.price,
                 total_no_iva=ln.total_no_iva,
             )
+            if line.reference_code and line.reference_code_origin is None:
+                line.reference_code_origin = "ocr"
+            if line.reference_code is None and get_settings().auto_reference_code:
+                line.reference_code = generate_reference_code(
+                    name_supplier=line.name_supplier,
+                    description=line.description,
+                    num_invoice=line.num_invoice,
+                )
+                if line.reference_code:
+                    line.reference_code_origin = "auto"
             db.add(line)
             out_lines.append(line)
 
         # Upsert minimal articles (reference_code + description + quantity/cost)
         upserted = 0
         for line in out_lines:
+            if not line.reference_code:
+                continue
             q = select(ImportacionArticulosMontcau).where(
                 ImportacionArticulosMontcau.reference_code == line.reference_code
             )
@@ -304,6 +397,11 @@ async def process_invoice(file: UploadFile = File(...), db: Session = Depends(ge
                     article.cantidad = line.quantity
                 if line.price is not None:
                     article.coste_unitario = line.price
+
+            decision = evaluate_price(line=line, article=article)
+            apply_price_decision(line, decision)
+            if decision.flag:
+                logger.info("price_flag", extra={"flag": decision.flag, "reference_code": line.reference_code})
 
     db.refresh(invoice)
     q = select(OcrInfoClothes).where(OcrInfoClothes.invoice_id == invoice.id).order_by(OcrInfoClothes.id)
@@ -334,6 +432,12 @@ async def reprocess_invoice(
     file_bytes = await read_upload_limited(file, max_bytes=get_settings().max_upload_bytes)
     ocr = OcrService()
     parsed_invoice, parsed_lines = ocr.parse(file_bytes, filename=file.filename or "uploaded")
+    stored_path = save_invoice_upload(
+        file_bytes,
+        filename=file.filename,
+        mime_type=file.content_type,
+        invoice_date=parsed_invoice.invoice_date,
+    )
 
     # Update header (only overwrite when OCR provides something)
     if parsed_invoice.cif_supplier and parsed_invoice.cif_supplier != "UNKNOWN":
@@ -346,10 +450,18 @@ async def reprocess_invoice(
         invoice.email_supplier = parsed_invoice.email_supplier
     if parsed_invoice.num_invoice is not None:
         invoice.num_invoice = parsed_invoice.num_invoice
-    if parsed_invoice.total_supplier is not None:
-        invoice.total_supplier = parsed_invoice.total_supplier
+    if parsed_invoice.total_invoice_amount is not None:
+        invoice.total_invoice_amount = parsed_invoice.total_invoice_amount
+    if parsed_invoice.invoice_type is not None:
+        invoice.invoice_type = parsed_invoice.invoice_type
+    if parsed_invoice.optional_fields is not None:
+        invoice.optional_fields = parsed_invoice.optional_fields
     if parsed_invoice.raw_text is not None:
         invoice.raw_text = parsed_invoice.raw_text
+    if stored_path is not None:
+        invoice.invoice_file_path = stored_path
+        invoice.invoice_file_name = file.filename
+        invoice.invoice_file_mime_type = file.content_type
 
     with db.begin():
         # Replace lines
@@ -374,12 +486,24 @@ async def reprocess_invoice(
                 price=ln.price,
                 total_no_iva=ln.total_no_iva,
             )
+            if line.reference_code and line.reference_code_origin is None:
+                line.reference_code_origin = "ocr"
+            if line.reference_code is None and get_settings().auto_reference_code:
+                line.reference_code = generate_reference_code(
+                    name_supplier=line.name_supplier,
+                    description=line.description,
+                    num_invoice=line.num_invoice,
+                )
+                if line.reference_code:
+                    line.reference_code_origin = "auto"
             db.add(line)
             new_lines.append(line)
 
         # Upsert minimal articles
         upserted = 0
         for line in new_lines:
+            if not line.reference_code:
+                continue
             q = select(ImportacionArticulosMontcau).where(
                 ImportacionArticulosMontcau.reference_code == line.reference_code
             )
@@ -400,6 +524,11 @@ async def reprocess_invoice(
                     article.cantidad = line.quantity
                 if line.price is not None:
                     article.coste_unitario = line.price
+
+            decision = evaluate_price(line=line, article=article)
+            apply_price_decision(line, decision)
+            if decision.flag:
+                logger.info("price_flag", extra={"flag": decision.flag, "reference_code": line.reference_code})
 
     db.refresh(invoice)
 

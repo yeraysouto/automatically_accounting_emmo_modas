@@ -3,11 +3,11 @@ from __future__ import annotations
 from fastapi import Depends, FastAPI, File, UploadFile
 
 from app.api.deps import AuthDep, read_upload_limited, validate_upload
-from app.settings import settings
+from app.settings import get_settings
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="EMMA OCR Provider API")
+    app = FastAPI(title="EMMO OCR Provider API")
 
     @app.get("/health")
     def health():
@@ -18,6 +18,7 @@ def create_app() -> FastAPI:
         # Stub provider: this is where you'd integrate Azure Document Intelligence,
         # Tesseract, etc. For now it returns a valid payload shape.
         validate_upload(file)
+        settings = get_settings()
         content = await read_upload_limited(file, max_bytes=settings.max_upload_bytes)
         raw_text = f"STUB_PROVIDER filename={file.filename} bytes={len(content)}"
 
@@ -29,7 +30,9 @@ def create_app() -> FastAPI:
                 "email_supplier": None,
                 "num_invoice": None,
                 "date": None,
-                "total_supplier": None,
+                "total_invoice_amount": None,
+                "invoice_type": None,
+                "optional_fields": None,
                 "raw_text": raw_text,
             },
             "lines": [],

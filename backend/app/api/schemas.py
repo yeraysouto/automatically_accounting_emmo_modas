@@ -12,7 +12,9 @@ class InvoiceCreate(BaseModel):
     tel_number_supplier: Optional[str] = None
     email_supplier: Optional[str] = None
     num_invoice: Optional[str] = None
-    total_supplier: Optional[float] = None
+    total_invoice_amount: Optional[float] = None
+    invoice_type: Optional[str] = None
+    optional_fields: Optional[dict] = None
     raw_text: Optional[str] = None
 
 
@@ -23,8 +25,13 @@ class InvoiceOut(BaseModel):
     tel_number_supplier: Optional[str]
     email_supplier: Optional[str]
     num_invoice: Optional[str]
-    total_supplier: Optional[float]
+    total_invoice_amount: Optional[float]
+    invoice_type: Optional[str]
+    optional_fields: Optional[dict]
     raw_text: Optional[str]
+    invoice_file_path: Optional[str]
+    invoice_file_name: Optional[str]
+    invoice_file_mime_type: Optional[str]
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -52,10 +59,13 @@ class ClothesLineOut(BaseModel):
     date: Optional[date]
 
     reference_code: Optional[str]
+    reference_code_origin: Optional[str]
     description: Optional[str]
     quantity: Optional[int]
     price: Optional[float]
     total_no_iva: Optional[float]
+    price_flag: Optional[str]
+    price_flag_reason: Optional[str]
 
     model_config = {"from_attributes": True}
 
@@ -163,7 +173,9 @@ class IngestInvoiceOcr(BaseModel):
     tel_number_supplier: Optional[str] = None
     email_supplier: Optional[str] = None
     num_invoice: Optional[str] = None
-    total_supplier: Optional[float] = None
+    total_invoice_amount: Optional[float] = None
+    invoice_type: Optional[str] = None
+    optional_fields: Optional[dict] = None
     raw_text: Optional[str] = None
 
     # Optional detected lines

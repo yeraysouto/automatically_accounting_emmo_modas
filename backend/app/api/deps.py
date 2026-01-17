@@ -20,7 +20,7 @@ def get_allowed_mime_types() -> set[str]:
 
 def require_api_key(x_api_key: str | None = Header(default=None, alias="X-API-Key")):
     settings = get_settings()
-    if settings.api_key is None:
+    if settings.api_key is None or not settings.require_api_key_for_write:
         return
 
     if not x_api_key or x_api_key != settings.api_key:
