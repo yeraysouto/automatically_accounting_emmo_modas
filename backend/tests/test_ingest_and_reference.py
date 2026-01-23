@@ -79,10 +79,10 @@ def test_set_reference_upserts_article(client: TestClient):
     assert r.status_code == 200, r.text
 
     # Article should exist
-    art = client.get("/articles/ABC123")
+    art = client.get("/articles/PRO_ABC123")
     assert art.status_code == 200
     art_json = art.json()
-    assert art_json["reference_code"] == "ABC123"
+    assert art_json["reference_code"] == "PRO_ABC123"
     assert art_json["descripcion"] == "PANTALON"
 
 
@@ -110,3 +110,25 @@ def test_file_upload_rejects_unsupported_mime(client: TestClient):
         headers={"X-API-Key": "test-key"},
     )
     assert r.status_code == 415
+
+
+def test_list_invoices_and_download_file(client: TestClient):
+    # Upload a PDF to create an invoice with a stored file
+    r = client.post(
+        "/process/invoice",
+        files={"file": ("invoice.pdf", b"%PDF-1.4 test", "application/pdf")},
+        headers={"X-API-Key": "test-key"},
+    )
+    assert r.status_code == 200, r.text
+    invoice_id = r.json()["invoice"]["id"]
+
+    # List invoices should include it
+    r2 = client.get("/invoices", headers={"X-API-Key": "test-key"})
+    assert r2.status_code == 200, r2.text
+    items = r2.json()
+    assert any(it["id"] == invoice_id for it in items)
+
+    # Download should return the stored bytes
+    r3 = client.get(f"/invoices/{invoice_id}/download", headers={"X-API-Key": "test-key"})
+    assert r3.status_code == 200, r3.text
+    assert r3.content.startswith(b"%PDF-1.4")

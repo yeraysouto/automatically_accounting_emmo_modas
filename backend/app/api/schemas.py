@@ -1,5 +1,15 @@
 from __future__ import annotations
 
+"""Pydantic schemas (request/response models).
+
+These models define the public API contract.
+
+Guidelines used in this file:
+- `*Create` models represent inbound payloads.
+- `*Out` models represent responses (ORM-backed via `from_attributes`).
+- OCR ingest payloads (`Ingest*`) carry source metadata + extracted fields.
+"""
+
 from datetime import date, datetime
 from typing import Optional
 
@@ -7,6 +17,7 @@ from pydantic import BaseModel, Field
 
 
 class InvoiceCreate(BaseModel):
+    """Payload to create an invoice header manually (without file/OCR)."""
     cif_supplier: str = Field(min_length=3, max_length=32)
     name_supplier: Optional[str] = None
     tel_number_supplier: Optional[str] = None
@@ -19,6 +30,7 @@ class InvoiceCreate(BaseModel):
 
 
 class InvoiceOut(BaseModel):
+    """Invoice response model (includes file metadata and status)."""
     id: int
     cif_supplier: str
     name_supplier: Optional[str]
@@ -29,15 +41,30 @@ class InvoiceOut(BaseModel):
     invoice_type: Optional[str]
     optional_fields: Optional[dict]
     raw_text: Optional[str]
+    status: str
+    last_error_code: Optional[str]
+    last_error_message: Optional[str]
     invoice_file_path: Optional[str]
     invoice_file_name: Optional[str]
     invoice_file_mime_type: Optional[str]
+    invoice_file_sha256: Optional[str]
+    invoice_file_bytes: Optional[int]
     created_at: datetime
 
     model_config = {"from_attributes": True}
 
 
+class InvoiceStatusUpdate(BaseModel):
+    """Update an invoice workflow status.
+
+    `clear_error=true` clears `last_error_*` fields.
+    """
+    status: str = Field(min_length=1, max_length=32)
+    clear_error: bool = False
+
+
 class ClothesLineCreate(BaseModel):
+    """Payload to add a line item to an invoice."""
     cif_supplier: str = Field(min_length=3, max_length=32)
     name_supplier: Optional[str] = None
     num_invoice: Optional[str] = None
@@ -51,6 +78,11 @@ class ClothesLineCreate(BaseModel):
 
 
 class ClothesLineOut(BaseModel):
+    """Invoice line response model.
+
+    Includes reference code normalization traceability (`reference_code_raw` and
+    `reference_code_origin`) plus pricing flags.
+    """
     id: int
     invoice_id: int
     cif_supplier: str
@@ -58,6 +90,7 @@ class ClothesLineOut(BaseModel):
     num_invoice: Optional[str]
     date: Optional[date]
 
+    reference_code_raw: Optional[str]
     reference_code: Optional[str]
     reference_code_origin: Optional[str]
     description: Optional[str]
@@ -71,6 +104,10 @@ class ClothesLineOut(BaseModel):
 
 
 class ArticleUpsert(BaseModel):
+    """Payload to upsert a Montcau article master row.
+
+    The API typically upserts a minimal subset initially, then enriches later.
+    """
     ean: Optional[str] = None
     reference_code: str = Field(min_length=1, max_length=64)
 
@@ -109,6 +146,7 @@ class ArticleUpsert(BaseModel):
 
 
 class ArticleOut(BaseModel):
+    """Article response model (ORM-backed)."""
     id: int
     ean: Optional[str]
     reference_code: str
@@ -152,16 +190,22 @@ class ArticleOut(BaseModel):
 
 
 class ProcessInvoiceResult(BaseModel):
+    """Result of an end-to-end invoice ingestion process."""
     invoice: InvoiceOut
     lines: list[ClothesLineOut]
     articles_upserted: int
 
 
 class LineSetReference(BaseModel):
+    """Payload to set/complete a missing reference code for an existing line."""
     reference_code: str = Field(min_length=1, max_length=64)
 
 
 class IngestInvoiceOcr(BaseModel):
+    """Payload for pre-parsed OCR invoice ingestion.
+
+    Used when OCR parsing happens upstream (e.g., WhatsApp/Telegram pipeline).
+    """
     # Where this came from (WhatsApp/Telegram)
     source_channel: str = Field(min_length=2, max_length=32)
     source_thread_id: Optional[str] = Field(default=None, max_length=128)
@@ -183,6 +227,7 @@ class IngestInvoiceOcr(BaseModel):
 
 
 class IngestLineOcr(BaseModel):
+    """Payload for ingesting a single OCR line into an existing invoice."""
     source_channel: str = Field(min_length=2, max_length=32)
     source_thread_id: Optional[str] = Field(default=None, max_length=128)
     source_message_id: Optional[str] = Field(default=None, max_length=128)

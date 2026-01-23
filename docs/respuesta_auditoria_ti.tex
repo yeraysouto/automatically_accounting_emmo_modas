@@ -1,0 +1,259 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[spanish]{babel}
+\usepackage{lmodern}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{enumitem}
+\usepackage{microtype}
+\usepackage{listings}
+\usepackage{xcolor}
+
+\geometry{margin=2.2cm}
+\hypersetup{colorlinks=true, linkcolor=blue, urlcolor=blue, citecolor=blue}
+
+\definecolor{codebg}{RGB}{248,248,248}
+\definecolor{codegray}{RGB}{90,90,90}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color{codebg},
+  frame=single,
+  framerule=0.2pt,
+  rulecolor=\color{codegray},
+  breaklines=true,
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false
+}
+
+\title{Respuesta T\'ecnica (Auditor\'ia TI): Seguridad, JSON, Almacenamiento, Pricing y Flujo de Datos}
+\author{Proyecto EMMA / EMMO}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\section{Contexto}
+Este documento responde, con terminolog\'ia de ingenier\'ia y auditor\'ia TI, a los comentarios sobre:
+\begin{itemize}
+  \item estructura del proyecto, ciberseguridad y gesti\'on de \texttt{.env};
+  \item organizaci\'on del JSON para OCR (multi-tipo de factura); 
+  \item gesti\'on y retenci\'on de PDFs por trimestre;
+  \item logging, observabilidad y pol\'itica de fallos;
+  \item pricing con reglas matem\'aticas sin IA;
+  \item migrabilidad SQLite $\rightarrow$ Postgres;
+  \item nomenclatura del modelo de datos y trazabilidad;
+  \item c\'omo pasa \texttt{ocr\_info\_clothes} a ``Importaci\'on Art\'iculos Montcau''.
+\end{itemize}
+
+\section{2. Estructura del proyecto, ciberseguridad y \texttt{.env}}
+\subsection{Estructura y responsabilidades}
+El repositorio separa responsabilidades:
+\begin{itemize}
+  \item \texttt{backend/}: API de negocio (FastAPI), modelos SQLAlchemy, servicios (OCR, storage, pricing), tests.
+  \item \texttt{docs/}: documentaci\'on t\'ecnica (\LaTeX) y material de requisitos.
+  \item \texttt{automate\_reading\_accountant.js}: prototipo/legado para pruebas iniciales; \textbf{no} se ejecuta en producci\'on ni es dependencia del backend.
+\end{itemize}
+
+\subsection{Gesti\'on de secretos y configuraci\'on (\texttt{.env})}
+Se utiliza \texttt{.env} \textbf{s\'olo} para desarrollo local. En producci\'on la configuraci\'on debe provenir del entorno (CI/CD, contenedor, secret manager).
+
+Variables relevantes (prefijo \texttt{EMMO\_}):
+\begin{itemize}
+  \item \texttt{EMMO\_DATABASE\_URL}: string de conexi\'on (SQLite por defecto; Postgres en prod).
+  \item \texttt{EMMO\_API\_KEY}: secreto est\'atico para autenticar clientes.
+  \item \texttt{EMMO\_REQUIRE\_API\_KEY\_FOR\_WRITE}: exige API key para escritura (POST/PUT).
+  \item \texttt{EMMO\_REQUIRE\_API\_KEY\_FOR\_READ}: (opcional) exige API key para lectura (GET) cuando la API se expone.
+\end{itemize}
+
+\subsection{Ciberseguridad: c\'omo se protegen las APIs (MVP + ruta a prod)}
+\textbf{MVP (ya implementado):}
+\begin{itemize}
+  \item \textbf{Autenticaci\'on por API key} en cabecera \texttt{X-API-Key}.
+  \item \textbf{Comparaci\'on en tiempo constante} (mitiga timing attacks en verificaci\'on de secretos).
+  \item \textbf{Security headers} (hardening del navegador): \texttt{X-Content-Type-Options}, \texttt{X-Frame-Options}, \texttt{Referrer-Policy}, \texttt{Permissions-Policy}.
+  \item \textbf{Request correlation}: se propaga \texttt{X-Request-ID} y se inyecta en logs para trazabilidad.
+  \item \textbf{Rate limiting b\'asico} (in-memory) configurable por minuto; \textbf{no} multi-instancia.
+  \item \textbf{Trusted hosts} (opcional) para mitigar host-header attacks si se expone directamente.
+\end{itemize}
+
+\textbf{Producci\'on (recomendaci\'on de auditor\'ia):}
+\begin{itemize}
+  \item Terminar TLS (HTTPS) en reverse proxy/API gateway.
+  \item WAF / rate limit centralizado (Redis/gateway) si se escala horizontalmente.
+  \item Secret manager (no \texttt{.env} en disco) y rotaci\'on del API key.
+  \item Segmentaci\'on de red (allowlist) y CORS estricto.
+\end{itemize}
+
+\section{JSON: organizaci\'on, multi-tipo de factura y consistencia}
+\subsection{Dise\~no recomendado}
+Para no ``confundir modelos'' ni forzar claves vac\'ias:
+\begin{enumerate}
+  \item Separar \textbf{cabecera} y \textbf{l\'ineas}.
+  \item Declarar \textbf{tipo de factura} en \texttt{invoice.invoice\_type}.
+  \item Guardar campos variables de negocio en \texttt{invoice.optional\_fields} (diccionario libre).
+\end{enumerate}
+
+\subsection{Contrato de OCR (payload normalizado)}
+Ejemplo de shape can\'onico:
+\begin{lstlisting}
+{
+  "invoice": {
+    "cif_supplier": "B123...",
+    "name_supplier": "Proveedor SL",
+    "num_invoice": "F-2026-001",
+    "date": "2026-01-16",
+    "total_invoice_amount": 123.45,
+    "invoice_type": "textil",
+    "optional_fields": {"campana": "rebajas"},
+    "raw_text": "..."
+  },
+  "lines": [
+    {
+      "reference_code": "ABC123",
+      "description": "CAMISETA",
+      "quantity": 10,
+      "price": 5.5,
+      "total_no_iva": 55.0
+    }
+  ]
+}
+\end{lstlisting}
+
+\subsection{Referencia: evitar colisiones y claves vac\'ias}
+Para manejar facturas con referencias incompletas y evitar colisiones:
+\begin{itemize}
+  \item \texttt{reference\_code\_raw}: lo que vino del OCR/manual.
+  \item \texttt{reference\_code}: formato can\'onico \texttt{SUP\_\_\_\_\_} + c\'odigo (prefijo 3 letras del proveedor).
+  \item Si no hay referencia: se habilita un fallback determinista \texttt{SUP\_\textless hash64\textgreater} o \textbf{human-in-the-loop} para completarla.
+\end{itemize}
+
+\section{Invoices: gesti\'on y retenci\'on de PDFs por trimestre}
+\subsection{Decisi\'on de auditor\'ia}
+\textbf{S\'i, se guardan} los PDFs/imagenes para trazabilidad, auditor\'ia y presentaci\'on trimestral.
+
+\subsection{Estrategia de almacenamiento}
+Al subir una factura, el backend persiste el fichero en:\\
+\texttt{<storage\_root>/invoices/<year>/Q<quarter>/<uuid>.<ext>}
+
+Metadatos en BBDD:
+\begin{itemize}
+  \item ruta relativa, nombre, MIME;
+  \item \textbf{sha256} del contenido (integridad / no repudio interno);
+  \item tama\~no en bytes.
+\end{itemize}
+
+\section{Tests: logging, seguimiento y pol\'itica de fallos}
+\subsection{Logs y observabilidad}
+Los logs se emiten a \textbf{stdout} (patr\'on cloud-native) y se pueden serializar como JSON.
+
+Seguimiento recomendado:
+\begin{itemize}
+  \item Agregador (ELK/Datadog/Grafana Loki) capturando stdout.
+  \item Correlaci\'on por \texttt{X-Request-ID}.
+  \item Alarmas por ratio de 4xx/5xx y por \texttt{last\_error\_code}.
+\end{itemize}
+
+\subsection{Fallo blando vs fallo duro (no parar el negocio)}
+\textbf{Fallo duro (bloquea request / para el flujo):}
+\begin{itemize}
+  \item autenticaci\'on (401),
+  \item MIME no permitido (415),
+  \item exceder tama\~no (413),
+  \item conflictos de integridad (409) donde el dato ser\'ia inconsistente.
+\end{itemize}
+
+\textbf{Fallo blando (no para sistema; se registra para corregir):}
+\begin{itemize}
+  \item fallo del OCR externo: se crea factura con \texttt{status=needs\_review} y se rellenan \texttt{last\_error\_*}.
+  \item l\'ineas sin \texttt{reference\_code}: se ingieren y se corrigen v\'ia human-in-the-loop.
+\end{itemize}
+
+\section{Pricing: correcci\'on de precios demasiado bajos (sin IA)}
+\subsection{Criterios y fuente de verdad}
+Dado que las descripciones son ruidosas y no hay SKU, el anclaje debe ser \textbf{ref\_code}.
+
+Criterios (reglas matem\'aticas):
+\begin{enumerate}
+  \item Si existe maestro de art\'iculos con \texttt{coste\_unitario}: validar que \texttt{price} $\ge$ \texttt{coste\_unitario} $\times$ \texttt{min\_ratio}.
+  \item Si no existe coste maestro: usar un hist\'orico por \texttt{reference\_code} (mediana) y validar contra \texttt{median} $\times$ \texttt{min\_ratio}.
+\end{enumerate}
+
+\subsection{\guillemotleft Necesitas una BBDD de antiguos precios?\guillemotright}
+S\'i: para el segundo caso. Se mantiene una tabla de observaciones (precio, referencia, timestamp). Esto permite reglas por negocio (p.ej. ventanas trimestrales, percentiles, etc.) sin IA.
+
+\section{Arquitectura de BBDD: SQLite hoy, Postgres ma\~nana}
+Se usa SQLite para iterar r\'apido; el acceso est\'a abstra\'ido por SQLAlchemy y se parametriza por \texttt{EMMO\_DATABASE\_URL}. En producci\'on se recomienda Postgres por concurrencia, locking y operaci\'on.
+
+\section{5. Modelo de datos (nomenclatura, PK/FK, trazabilidad)}
+\subsection{5.1 Cabecera (proveedor/factura)}
+Decisiones:
+\begin{itemize}
+  \item \texttt{name\_supplier}: string.
+  \item \texttt{tel\_number\_supplier}: \textbf{string} (internacionalizaci\'on, prefijos, formatos).
+  \item \texttt{email\_supplier}: string.
+  \item \texttt{num\_invoice}: string.
+  \item \texttt{total\_invoice\_amount}: evita ambig\"uedad con SQL (m\'as claro que \texttt{total\_supplier}).
+  \item Trazabilidad de mensajes: \texttt{source\_channel}, \texttt{source\_thread\_id}, \texttt{source\_message\_id}.
+\end{itemize}
+
+\subsection{5.2 PK y FK (glosario)}
+\begin{itemize}
+  \item \textbf{PK (Primary Key)}: identificador \`unico de una fila (ej. \texttt{data\_ocr\_invoice.id}).
+  \item \textbf{FK (Foreign Key)}: referencia a otra tabla (ej. \texttt{ocr\_info\_clothes.invoice\_id} apunta a la PK de factura).
+\end{itemize}
+
+\subsection{ref\_code: m\'ultiples estrategias (OCR + hash64 + human-in-the-loop)}
+Estrategia gradual:
+\begin{enumerate}
+  \item OCR intenta extraer \texttt{reference\_code}.
+  \item Si viene, se normaliza a \texttt{SUP\_\_\_ + ref\_code} (prefijo 3 letras + ``\_'' + c\'odigo).
+  \item Si no viene, se genera \texttt{SUP\_\textless hash64\textgreater} (determinista) o se solicita al operador (human-in-the-loop).
+\end{enumerate}
+
+\section{OCR: Tesseract}
+Tesseract es una buena opci\'on para un primer escal\'on local (im\'agen) y como fallback. En PDFs complejos suele requerir pipeline extra (render PDF $\rightarrow$ imagen $\rightarrow$ OCR) o un proveedor especializado.
+
+\section{Paso de \texttt{ocr\_info\_clothes} a Importaci\'on Art\'iculos Montcau}
+\subsection{Modelo de integraci\'on}
+Se implementa una exportaci\'on en JSON (preparado para transformaci\'on a CSV o API externa):
+\begin{itemize}
+  \item Se seleccionan l\'ineas de la factura.
+  \item Se filtran las que tienen \texttt{reference\_code} (las dem\'as quedan para human-in-the-loop).
+  \item Se proyectan campos a ``fila Montcau'': \texttt{reference\_code}, \texttt{descripcion}, \texttt{cantidad}, \texttt{coste\_unitario}.
+\end{itemize}
+
+\subsection{Endpoint de exportaci\'on (backend)}
+\begin{lstlisting}
+GET /invoices/{invoice_id}/export/importacion-montcau
+\end{lstlisting}
+
+\subsection{Integraci\'on con PrestaShop (siguiente paso)}
+Dado que esta semana hay reuniones con el equipo de integraci\'on, el enfoque recomendado es:
+\begin{itemize}
+  \item acordar el \textbf{contrato} (campos obligatorios, encoding, unidad de medida, reglas de merge),
+  \item decidir si la integraci\'on es por:\\
+    (a) import CSV, (b) API interna Montcau, (c) API PrestaShop (webservice) + mapeo a productos,
+  \item mantener el backend como \textbf{fuente de trazabilidad} (auditable) y la integraci\'on como capa de entrega.
+\end{itemize}
+
+\section{Comandos de compilaci\'on (terminal)}
+Recomendado (latexmk):
+\begin{lstlisting}
+cd docs
+latexmk -pdf respuesta_auditoria_ti.tex
+\end{lstlisting}
+
+Alternativa (sin latexmk):
+\begin{lstlisting}
+cd docs
+pdflatex respuesta_auditoria_ti.tex
+pdflatex respuesta_auditoria_ti.tex
+\end{lstlisting}
+
+\end{document}

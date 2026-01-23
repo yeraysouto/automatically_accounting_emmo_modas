@@ -1,8 +1,18 @@
 from __future__ import annotations
 
+"""Local storage for uploaded invoice files.
+
+Uploads are optionally persisted on disk under a predictable quarterly layout:
+
+    <storage_root>/invoices/<year>/Q<quarter>/<uuid>.<ext>
+
+The database stores the relative path and metadata (sha256, bytes, mime-type),
+so files can be downloaded later via the API.
+"""
+
 import mimetypes
 import os
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
@@ -10,6 +20,7 @@ from app.settings import get_settings
 
 
 def _safe_ext(filename: str | None, mime_type: str | None) -> str:
+    """Choose a safe extension from filename or mime-type, defaulting to .bin."""
     if filename:
         _, ext = os.path.splitext(filename)
         if ext:
@@ -22,8 +33,9 @@ def _safe_ext(filename: str | None, mime_type: str | None) -> str:
 
 
 def _quarter_from_date(value: date | None) -> tuple[int, str]:
+    """Return (year, 'Qn') for an invoice date; defaults to current UTC date."""
     if value is None:
-        value = datetime.utcnow().date()
+        value = datetime.now(timezone.utc).date()
     q = (value.month - 1) // 3 + 1
     return value.year, f"Q{q}"
 
@@ -35,6 +47,10 @@ def save_invoice_upload(
     mime_type: str | None,
     invoice_date: date | None,
 ) -> str | None:
+    """Persist an uploaded invoice file to local storage.
+
+    Returns a relative path (to be stored in DB) or `None` if storage is disabled.
+    """
     settings = get_settings()
     if not settings.store_uploads:
         return None

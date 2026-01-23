@@ -1,6 +1,16 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+"""SQLAlchemy ORM models.
+
+Core tables:
+
+- `DataOcrInvoice`: invoice header + ingestion metadata + stored file metadata.
+- `OcrInfoClothes`: normalized invoice lines detected/entered.
+- `ImportacionArticulosMontcau`: article master / import format used by Montcau.
+- `PriceObservation`: historical observed prices per reference_code.
+"""
+
+from datetime import date, datetime, timezone
 from typing import Optional
 
 from sqlalchemy import Date, DateTime, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
@@ -10,6 +20,11 @@ from app.db.base import Base
 
 
 class DataOcrInvoice(Base):
+    """Invoice header.
+
+    Stores supplier identity, invoice metadata, status/error tracking, and the
+    uploaded file metadata (path, sha256, bytes).
+    """
     __tablename__ = "data_ocr_invoice"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -30,10 +45,14 @@ class DataOcrInvoice(Base):
     source_thread_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
     source_message_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(32), default="draft")
+    last_error_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    last_error_message: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
     invoice_file_path: Mapped[Optional[str]] = mapped_column(String(2048), nullable=True)
     invoice_file_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     invoice_file_mime_type: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    invoice_file_sha256: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    invoice_file_bytes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     clothes_lines: Mapped[list[OcrInfoClothes]] = relationship(
         back_populates="invoice",
@@ -43,6 +62,11 @@ class DataOcrInvoice(Base):
 
 
 class OcrInfoClothes(Base):
+    """Invoice line item.
+
+    Each row represents a detected/ingested product line for an invoice.
+    `reference_code` may be missing initially and completed later.
+    """
     __tablename__ = "ocr_info_clothes"
     __table_args__ = (
         UniqueConstraint("invoice_id", "reference_code", name="uq_invoice_reference"),
@@ -58,6 +82,7 @@ class OcrInfoClothes(Base):
     date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
 
     # Can be null when OCR doesn't provide the reference; it can be filled later.
+    reference_code_raw: Mapped[Optional[str]] = mapped_column(String(64), index=True, nullable=True)
     reference_code: Mapped[Optional[str]] = mapped_column(String(64), index=True, nullable=True)
     reference_code_origin: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
     description: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
@@ -71,6 +96,11 @@ class OcrInfoClothes(Base):
 
 
 class ImportacionArticulosMontcau(Base):
+    """Montcau article master/import row.
+
+    This mirrors the import structure used downstream. The API upserts minimal
+    fields (reference_code, description, cost) and can be enriched later.
+    """
     __tablename__ = "importacion_articulos_montcau"
     __table_args__ = (
         UniqueConstraint("reference_code", name="uq_reference_code"),
@@ -115,4 +145,25 @@ class ImportacionArticulosMontcau(Base):
     tercera_foto: Mapped[Optional[str]] = mapped_column(String(2048), nullable=True)
     cuarta_foto: Mapped[Optional[str]] = mapped_column(String(2048), nullable=True)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class PriceObservation(Base):
+    """Historical observed unit prices.
+
+    Used to compute a median fallback when master data does not have `coste_unitario`.
+    """
+    __tablename__ = "price_observation"
+    __table_args__ = (
+        UniqueConstraint("invoice_id", "line_id", name="uq_price_obs_invoice_line"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    cif_supplier: Mapped[str] = mapped_column(String(32), index=True)
+    reference_code: Mapped[str] = mapped_column(String(64), index=True)
+    observed_price: Mapped[float] = mapped_column(Float)
+
+    invoice_id: Mapped[int] = mapped_column(ForeignKey("data_ocr_invoice.id", ondelete="CASCADE"))
+    line_id: Mapped[int] = mapped_column(ForeignKey("ocr_info_clothes.id", ondelete="CASCADE"))

@@ -11,6 +11,9 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     db_path = tmp_path / "test.db"
     monkeypatch.setenv("EMMO_DATABASE_URL", f"sqlite:///{db_path}")
     monkeypatch.setenv("EMMO_API_KEY", "test-key")
+    monkeypatch.setenv("EMMO_ENFORCE_REFERENCE_CODE_PREFIX", "true")
+    monkeypatch.setenv("EMMO_STORAGE_ROOT", str(tmp_path / "storage"))
+    monkeypatch.setenv("EMMO_STORE_UPLOADS", "true")
     monkeypatch.delenv("EMMO_OCR_API_URL", raising=False)
 
     # Clear settings cache so env vars are picked up

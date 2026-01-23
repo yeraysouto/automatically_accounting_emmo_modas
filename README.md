@@ -15,4 +15,11 @@ Documento técnico y plan por fases en [docs/emma_system.tex](docs/emma_system.t
 
 ## Script legado
 
-- `automate_reading_accountant.js`: prototipo/legado usado para pruebas iniciales. No es parte del backend actual ni se ejecuta en producción.
+- `automate_reading_accountant.js`: prototipo/legado usado para pruebas iniciales.
+	- No es parte del backend actual.
+	- No se ejecuta en producción ni lo importa el backend.
+	- Se mantiene sólo como referencia histórica (se puede eliminar cuando ya no aporte valor).
+
+## Demo
+
+Hay una demo reproducible (sin levantar servidor) en [backend/README.md](backend/README.md).

@@ -1,0 +1,6 @@
+Alembic migrations live here.
+
+Common commands (run from backend/):
+- alembic revision -m "message"
+- alembic upgrade head
+- alembic downgrade -1
